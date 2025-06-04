@@ -1,201 +1,146 @@
-
 input {
-    kafka {
-        bootstrap_servers => "localhost:9092"
-        topics => ["cpu_logs", "hpcm_logs", "mem_logs", "disk_logs", "net_logs"]
-        codec => "json"
-        group_id => "logstash-group"
-    }
+  kafka {
+    bootstrap_servers => "127.0.0.1:9092"
+    topics => ["cpu_logs", "mem_logs", "disk_logs", "net_logs", "hpcm_logs"]
+    codec => "json"
+    group_id => "logstash-group"
+  }
 }
 
 filter {
-    # Parse timestamp
-    date {
-        match => ["@timestamp", "ISO8601"]
-        target => "@timestamp"
-    }
+  json {
+    source => "log"
+  }
 
-    # Convert timestamp to nanoseconds for Loki
-    ruby {
-        code => '
-            event.set("loki_timestamp", (event.get("@timestamp").to_f * 1000000000).to_i.to_s)
-        '
-    }
+  ruby {
+    code => '
+      require "time"
+      ts = event.get("@timestamp")
+      if ts
+        local_ts = ts.time.localtime("+05:30")
+        event.set("timestamp", local_ts.iso8601)
+      end
+    '
+  }
 
-    # CPU logs enrichment
-    if [log_type] == "cpu_metrics" {
-        mutate {
-            add_field => {
-                "cpu_total"      => "%{[cpu_p]}"
-                "user_percent"   => "%{[user_p]}"
-                "system_percent" => "%{[system_p]}"
-                "cpu0_usage"     => "%{[cpu0.p_cpu]}"
-                "cpu1_usage"     => "%{[cpu1.p_cpu]}"
-                "cpu2_usage"     => "%{[cpu2.p_cpu]}"
-                "source"         => "cpu_logs"
-            }
-        }
+  # CPU Metrics
+  if [log_type] == "cpu_metrics" {
+    mutate {
+      add_field => {
+        "cpu_total"      => "%{[cpu_p]}"
+        "user_percent"   => "%{[user_p]}"
+        "system_percent" => "%{[system_p]}"
+        "cpu0_usage"     => "%{[cpu0.p_cpu]}"
+        "cpu1_usage"     => "%{[cpu1.p_cpu]}"
+        "cpu2_usage"     => "%{[cpu2.p_cpu]}"
+        "host_name"      => "%{[host]}"
+        "service_name"   => "cpu_monitor"
+        "logtype"        => "cpu_metrics"
+        "severity"       => "info"
+        "tenant_id"      => "%{[tenant_id]}"
+        "message"        => "CPU metrics: total=%{[cpu_p]}%, user=%{[user_p]}%, system=%{[system_p]}%, cpu0=%{[cpu0.p_cpu]}%, cpu1=%{[cpu1.p_cpu]}%, cpu2=%{[cpu2.p_cpu]}%"
+      }
     }
-    # System logs enrichment
-    else if [log_type] == "system_logs" {
-        if ![message] or [message] == "" {
-            mutate {
-                add_field => { "message" => "No message available" }
-            }
-        }
-        mutate {
-            add_field => {
-                "source" => "hpcm_logs"
-            }
-        }
+  }
+
+  # Memory Metrics
+  else if [log_type] == "mem_metrics" {
+    mutate {
+      add_field => {
+        "mem_total"      => "%{[mem.total]}"
+        "mem_free"       => "%{[mem.free]}"
+        "mem_used"       => "%{[mem.used]}"
+        "mem_buffers"    => "%{[mem.buffers]}"
+        "mem_cached"     => "%{[mem.cached]}"
+        "mem_shared"     => "%{[mem.shared]}"
+        "mem_available"  => "%{[mem.available]}"
+        "host_name"      => "%{[host]}"
+        "service_name"   => "memory_monitor"
+        "logtype"        => "mem_metrics"
+        "severity"       => "info"
+        "tenant_id"      => "%{[tenant_id]}"
+        "message"        => "Memory metrics: total=%{[mem.total]}, used=%{[mem.used]}, free=%{[mem.free]}, buffers=%{[mem.buffers]}, cached=%{[mem.cached]}, shared=%{[mem.shared]}, available=%{[mem.available]}"
+      }
     }
-    # Mem logs enrichment
-    else if [log_type] == "mem_metrics" {
-        mutate {
-            add_field => {
-                "mem_total"      => "%{[mem.total]}"
-                "mem_free"       => "%{[mem.free]}"
-                "mem_used"       => "%{[mem.used]}"
-                "mem_buffers"    => "%{[mem.buffers]}"
-                "mem_cached"     => "%{[mem.cached]}"
-                "mem_shared"     => "%{[mem.shared]}"
-                "mem_available"  => "%{[mem.available]}"
-                "source"         => "mem_logs"
-            }
-        }
+  }
+
+  # Disk Metrics
+  else if [log_type] == "disk_metrics" {
+    mutate {
+      add_field => {
+        "disk_total"       => "%{[disk.total]}"
+        "disk_used"        => "%{[disk.used]}"
+        "disk_free"        => "%{[disk.free]}"
+        "disk_io_read"     => "%{[disk.io.read]}"
+        "disk_io_write"    => "%{[disk.io.write]}"
+        "disk_read_speed"  => "%{[disk.read_speed]}"
+        "disk_write_speed" => "%{[disk.write_speed]}"
+        "host_name"        => "%{[host]}"
+        "service_name"     => "disk_monitor"
+        "logtype"          => "disk_metrics"
+        "severity"         => "info"
+        "tenant_id"        => "%{[tenant_id]}"
+        "message"          => "Disk metrics: total=%{[disk.total]}, used=%{[disk.used]}, free=%{[disk.free]}, io_read=%{[disk.io.read]}, io_write=%{[disk.io.write]}, read_speed=%{[disk.read_speed]}, write_speed=%{[disk.write_speed]}"
+      }
     }
-    # Disk logs enrichment
-    else if [log_type] == "disk_metrics" {
-        mutate {
-            add_field => {
-                "disk_total"     => "%{[disk.total]}"
-                "disk_used"      => "%{[disk.used]}"
-                "disk_free"      => "%{[disk.free]}"
-                "disk_io_read"   => "%{[disk.io.read]}"
-                "disk_io_write"  => "%{[disk.io.write]}"
-                "disk_read_speed"=> "%{[disk.read_speed]}"
-                "disk_write_speed"=> "%{[disk.write_speed]}"
-                "source"         => "disk_logs"
-            }
-        }
+  }
+
+  # Network Metrics
+  else if [log_type] == "net_metrics" {
+    mutate {
+      add_field => {
+        "net_in"           => "%{[net.if.in]}"
+        "net_out"          => "%{[net.if.out]}"
+        "net_errors_in"    => "%{[net.if.errors_in]}"
+        "net_errors_out"   => "%{[net.if.errors_out]}"
+        "net_dropped_in"   => "%{[net.if.dropped_in]}"
+        "net_dropped_out"  => "%{[net.if.dropped_out]}"
+        "net_rx_bytes"     => "%{[net.if.rx_bytes]}"
+        "net_tx_bytes"     => "%{[net.if.tx_bytes]}"
+        "host_name"        => "%{[host]}"
+        "service_name"     => "network_monitor"
+        "logtype"          => "net_metrics"
+        "severity"         => "info"
+        "tenant_id"        => "%{[tenant_id]}"
+        "message"          => "Network metrics: in=%{[net.if.in]}, out=%{[net.if.out]}, errors_in=%{[net.if.errors_in]}, errors_out=%{[net.if.errors_out]}, dropped_in=%{[net.if.dropped_in]}, dropped_out=%{[net.if.dropped_out]}, rx_bytes=%{[net.if.rx_bytes]}, tx_bytes=%{[net.if.tx_bytes]}"
+      }
     }
-    # Net logs enrichment
-    else if [log_type] == "net_metrics" {
-        mutate {
-            add_field => {
-                "net_in"         => "%{[net.if.in]}"
-                "net_out"        => "%{[net.if.out]}"
-                "net_errors_in"  => "%{[net.if.errors_in]}"
-                "net_errors_out" => "%{[net.if.errors_out]}"
-                "net_dropped_in" => "%{[net.if.dropped_in]}"
-                "net_dropped_out"=> "%{[net.if.dropped_out]}"
-                "net_rx_bytes"   => "%{[net.if.rx_bytes]}"
-                "net_tx_bytes"   => "%{[net.if.tx_bytes]}"
-                "source"         => "net_logs"
-            }
-        }
+  }
+
+  # System Logs
+  else if [log_type] == "system_logs" {
+    if ![message] or [message] == "" {
+      mutate {
+        add_field => { "message" => "No message available" }
+      }
     }
+    mutate {
+      add_field => {
+        "host_name"    => "%{[host]}"
+        "service_name" => "system_logger"
+        "logtype"      => "system_logs"
+        "severity"     => "info"
+        "tenant_id"    => "%{[tenant_id]}"
+      }
+    }
+  }
+
+  mutate {
+    remove_field => ["event", "Timestamp", "log"]
+  }
 }
 
 output {
-    stdout {
-        codec => rubydebug
+  elasticsearch {
+    hosts => ["http://localhost:9428/insert/elasticsearch/"]
+    parameters => {
+      "_msg_field"     => "message"
+      "_time_field"    => "timestamp"
+      "_stream_fields" => "host_name,service_name,logtype,severity,tenant_id"
     }
+  }
 
-    if [log_type] == "cpu_metrics" {
-        http {
-            url => "http://127.0.0.1:9428/insert/elasticsearch/_bulk"
-            http_method => "post"
-            format => "message"
-            content_type => "application/x-ndjson"
-            retry_failed => false
-            pool_max => 1
-            connect_timeout => 10
-            request_timeout => 15
-            headers => {
-                "Content-Type" => "application/x-ndjson"
-                "AccountID" => "%{[tenant_id]}"
-            }
-            message => '{ "index": {} }
-{ "timestamp": "%{[vl_timestamp]}", "source": "%{[source]}", "log_type": "%{[log_type]}", "cpu_total": "%{[cpu_total]}", "user_percent": "%{[user_percent]}", "system_percent": "%{[system_percent]}", "cpu0_usage": "%{[cpu0_usage]}", "cpu1_usage": "%{[cpu1_usage]}", "cpu2_usage": "%{[cpu2_usage]}" }
-'
-        }
-    }
-    else if [log_type] == "system_logs" {
-        http {
-            url => "http://127.0.0.1:9428/insert/elasticsearch/_bulk"
-            http_method => "post"
-            format => "message"
-            content_type => "application/x-ndjson"
-            retry_failed => false
-            pool_max => 1
-            connect_timeout => 10
-            request_timeout => 15
-            headers => {
-                "Content-Type" => "application/x-ndjson"
-                "AccountID" => "%{[tenant_id]}"
-            }
-            message => '{ "index": {} }
-{ "timestamp": "%{[vl_timestamp]}", "source": "%{[source]}", "log_type": "%{[log_type]}", "systemd_unit": "%{[_SYSTEMD_UNIT]}", "priority": "%{[PRIORITY]}", "pid": "%{[_PID]}", "comm": "%{[_COMM]}", "syslog_facility": "%{[SYSLOG_FACILITY]}", "message": "%{[message]}" }
-'
-        }
-    }
-    else if [log_type] == "mem_metrics" {
-        http {
-            url => "http://127.0.0.1:9428/insert/elasticsearch/_bulk"
-            http_method => "post"
-            format => "message"
-            content_type => "application/x-ndjson"
-            retry_failed => false
-            pool_max => 1
-            connect_timeout => 10
-            request_timeout => 15
-            headers => {
-                "Content-Type" => "application/x-ndjson"
-                "AccountID" => "%{[tenant_id]}"
-            }
-            message => '{ "index": {} }
-{ "timestamp": "%{[vl_timestamp]}", "source": "%{[source]}", "log_type": "%{[log_type]}", "mem_total": "%{[mem_total]}", "mem_free": "%{[mem_free]}", "mem_used": "%{[mem_used]}", "mem_buffers": "%{[mem_buffers]}", "mem_cached": "%{[mem_cached]}", "mem_shared": "%{[mem_shared]}", "mem_available": "%{[mem_available]}" }
-'
-        }
-    }
-    else if [log_type] == "disk_metrics" {
-        http {
-            url => "http://127.0.0.1:9428/insert/elasticsearch/_bulk"
-            http_method => "post"
-            format => "message"
-            content_type => "application/x-ndjson"
-            retry_failed => false
-            pool_max => 1
-            connect_timeout => 10
-            request_timeout => 15
-            headers => {
-                "Content-Type" => "application/x-ndjson"
-                "AccountID" => "%{[tenant_id]}"
-            }
-            message => '{ "index": {} }
-{ "timestamp": "%{[vl_timestamp]}", "source": "%{[source]}", "log_type": "%{[log_type]}", "disk_total": "%{[disk_total]}", "disk_used": "%{[disk_used]}", "disk_free": "%{[disk_free]}", "disk_io_read": "%{[disk_io_read]}", "disk_io_write": "%{[disk_io_write]}", "disk_read_speed": "%{[disk_read_speed]}", "disk_write_speed": "%{[disk_write_speed]}" }
-'
-        }
-    }
-    else if [log_type] == "net_metrics" {
-        http {
-            url => "http://127.0.0.1:9428/insert/elasticsearch/_bulk"
-            http_method => "post"
-            format => "message"
-            content_type => "application/x-ndjson"
-            retry_failed => false
-            pool_max => 1
-            connect_timeout => 10
-            request_timeout => 15
-            headers => {
-                "Content-Type" => "application/x-ndjson"
-                "AccountID" => "%{[tenant_id]}"
-            }
-            message => '{ "index": {} }
-{ "timestamp": "%{[vl_timestamp]}", "source": "%{[source]}", "log_type": "%{[log_type]}", "net_in": "%{[net_in]}", "net_out": "%{[net_out]}", "net_errors_in": "%{[net_errors_in]}", "net_errors_out": "%{[net_errors_out]}", "net_dropped_in": "%{[net_dropped_in]}", "net_dropped_out": "%{[net_dropped_out]}", "net_rx_bytes": "%{[net_rx_bytes]}", "net_tx_bytes": "%{[net_tx_bytes]}" }
-'
-        }
-    }
-}
+  stdout {
+    codec => rubydebug { metadata => true }
+  }
 }
